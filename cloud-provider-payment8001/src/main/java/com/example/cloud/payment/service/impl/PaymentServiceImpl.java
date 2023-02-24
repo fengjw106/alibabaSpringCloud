@@ -9,6 +9,9 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 
+/**
+ * 支付模块
+ */
 @Service
 @Slf4j
 public class PaymentServiceImpl implements PaymentService {
