@@ -7,4 +7,6 @@ public interface PaymentService {
     CommonResult<Integer> creatPayment(PaymentDO paymentDO);
 
     CommonResult<PaymentDO> selectById(Long id);
+
+    String paymentFeignTimeOut();
 }

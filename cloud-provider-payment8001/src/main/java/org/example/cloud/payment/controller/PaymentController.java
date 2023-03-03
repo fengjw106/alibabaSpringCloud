@@ -44,4 +44,9 @@ public class PaymentController {
         }
         return this.discoveryClient;
     }
+
+    @GetMapping("/paymentFeignTimeOut")
+    public String paymentFeignTimeOut() {
+        return paymentService.paymentFeignTimeOut();
+    }
 }

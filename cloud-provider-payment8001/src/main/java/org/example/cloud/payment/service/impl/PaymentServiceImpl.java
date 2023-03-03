@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @Slf4j
@@ -40,5 +41,17 @@ public class PaymentServiceImpl implements PaymentService {
         } else {
             return new CommonResult<>(444, "没有对应记录,查询ID: " + id + ",server port:" + serverPort, null);
         }
+    }
+
+    @Override
+    public String paymentFeignTimeOut() {
+        System.out.println("*****paymentFeignTimeOut from port: " + serverPort);
+        //暂停几秒钟线程
+        try {
+            TimeUnit.SECONDS.sleep(3);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return serverPort;
     }
 }
