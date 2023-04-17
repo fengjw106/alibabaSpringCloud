@@ -1,0 +1,5 @@
+CREATE TABLE `payment` (
+ `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+ `serial` varchar(200) DEFAULT '',
+ PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb3;

@@ -186,10 +186,129 @@ Hystrix是一个用于处理分布式系统的延迟和容错的开源库，在�
 + 服务熔断触发服务降级
 + 线程池/信号量打满也会导致服务降级
 
+秒杀高并发等操作，严禁一窝蜂的过来拥挤，大家排队，一秒钟N个，有序进行。
+
+使用@HystrixCommand注解，一旦调用服务方法失败并抛出了错误信息后，会自动调用@HystrixCommand标注好的fallbackMethod调用类中的指定方法
+
+例如
+`
+@HystrixCommand(fallbackMethod = "paymentInfoTimeOutHandler", commandProperties = {
+@HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds", value = "3000")
+})
+`
+
+是否调用兜底fallback方法是取决于 @HystrixProperty 中的 value = "4000"，只要这个value的值大于服务端8001的睡眠时间或进来就直接异常，比如说 10/0 就会走80的fallback方法，与application.yml中配置的ribbon的那个feign的超时时间以及hystrix的时间无关
+
+**问题**
+1. 每个业务都有一个兜底方法，太冗余
+   @DefaultProperties(defaultFallback = “”)  统一的处理方法
+2. 和业务代码耦合
+   创建兜底fallback类，需要增加配置feign:hystrix:enabled: true
+   
+controller中超时时间配置不生效原因：
+
+关键在于feign:hystrix:enabled: true的作用，官网解释“Feign将使用断路器包装所有方法”，也就是将@FeignClient标记的那个service接口下所有的方法进行了hystrix包装（类似于在这些方法上加了一个@HystrixCommand），这些方法会应用一个默认的超时时间为1s，所以你的service方法也有一个1s的超时时间，service1s就会报异常，controller立马进入备用方法，controller上那个3秒那超时时间就没有效果了。
+
 **服务熔断**
 
 类比保险丝达到最大服务访问后，直接拒绝访问，拉闸限电，然后调用服务降级的方法并返回友好提示， 就是保险丝：服务的降级->进而熔断->恢复调用链路。
 
+**熔断类型**
+1. 熔断打开
+  请求不再进行调用当前服务，内部设置时钟一般为MTTR（平均故障处理时间)，当打开时长达到所设时钟则进入半熔断状态
+2. 熔断关闭
+  熔断关闭不会对服务进行熔断
+3. 熔断半开
+  部分请求根据规则调用当前服务，如果请求成功且符合规则则认为当前服务恢复正常，关闭熔断
+
+**断路器在什么情况下开始起作用**
+
+涉及到断路器的三个重要参数：请求总数阈值、快照时间窗、错误百分比阈值
+
+请求总数阈值：在快照时间窗内，必须满足请求总数阀值才有资格熔断。默认为20，意味着在10秒内，如果该hystrix命令的调用次数不足20次，即使所有的请求都超时或其他原因失败，断路器都不会打开
+
+快照时间窗：断路器确定是否打开需要统计一些请求和错误数据，而统计的时间范围就是快照时间窗，默认为最近的10秒【这个时间窗口期是打开短路器之后到尝试恢复，期间拒绝请求的时间】
+
+错误百分比阈值：当请求总数在快照时间窗内超过了阀值，比如发生了30次调用，如果在这30次调用中，有15次发生了超时异常，也就是超过50%的错误百分比，在默认设定50%阀值情况下，这时候就会将断路器打开
+
+**断路器开启或者关闭的条件**
+
+1. 当满足一定的阀值的时候（默认10秒内超过20个请求次数）
+2. 当失败率达到一定的时候（默认10秒内超过50%的请求失败）
+3. 到达以上阀值，断路器将会开启
+4. 当开启的时候，所有请求都不会进行转发
+5. 一段时间之后（默认是5秒），这个时候断路器是半开状态，会让其中一个请求进行转发；如果成功，断路器会关闭；若失败，继续开启。重复4和5
+
+**断路器打开之后**
+
+再有请求调用的时候，将不会调用主逻辑，而是直接调用降级fallback，通过断路器，实现了自动地发现错误并将降级逻辑切换为主逻辑，减少响应延迟的效果
+
+**原来的主逻辑如何恢复**
+
+对于这一问题，hystrix也为我们实现了自动恢复功能。当断路器打开，对主逻辑进行熔断之后，hystrix会启动一个休眠时间窗，在这个时间窗内，降级逻辑是临时的成为主逻辑，当休眠时间窗到期，断路器将进入半开状态，释放一次请求到原来的主逻辑上，如果此次请求正常返回，那么断路器将继续闭合，主逻辑恢复；如果这次请求依然有问题，断路器继续进入打开状态，休眠时间窗重新计时。
+
 **服务限流**
 
 秒杀高并发等操作，严禁一窝蜂的过来拥挤，大家排队，一秒钟N个，有序进行。
+
+## SpringCloud Gateway 网关
+
+**三大核心概念**
+
+1、Route(路由)
+路由是构建网关的基本模块，它由ID，目标URI，一系列的断言和过滤器组成，如果断言为true则匹配该路由
+
+2、Predicate(断言)
+参考的是Java8的java.util.function.Predicate，开发人员可以匹配HTTP请求中的所有内容(例如请求头或请求参数)，如果请求与断言相匹配则进行路由
+
+3、Filter(过滤)
+指的是Spring框架中GatewayFilter的实例，使用过滤器，可以在请求被路由前或者之后对请求进行修改。
+
+web请求，通过一些匹配条件，定位到真正的服务节点。并在这个转发过程的前后，进行一些精细化控制。
+predicate就是我们的匹配条件；而filter，就可以理解为一个无所不能的拦截器。有了这两个元素，再加上目标uri，就可以实现一个具体的路由了
+
+**Predicate的使用**
+
+Spring Cloud Gateway将路由匹配作为Spring WebFlux HandlerMapping基础架构的一部分，Spring Cloud Gateway包括许多内置的Route Predicate工厂，所有这些Predicate都与HTTP请求的不同属性匹配，多个Route Predicate工厂可以进行组合
+
+Spring Cloud Gateway 创建 Route 对象时，使用 RoutePredicateFactory 创建 Predicate 对象，Predicate 对象可以赋值给 Route。 Spring Cloud Gateway 包含许多内置的Route Predicate Factories。所有这些谓词都匹配HTTP请求的不同属性。多种谓词工厂可以组合，并通过逻辑and。
+
+**断言**
+after, before, between, cookie, header, host, method, path, query, readBodyPredicateFactory, remoteAddr, weight, cloudFoundryRoutService
+
+**Filter的使用**
+路由过滤器可用于修改进入的HTTP请求和返回的HTTP响应，路由过滤器只能指定路由进行使用
+
+Spring Cloud Gateway 内置了多种路由过滤器，他们都由GatewayFilter的工厂类来产生
+
+生命周期 pre post
+
+种类 GatewayFilter GlobalFilter
+
+自定义过滤器 implements GlobalFilter,Ordered ,但是自定义的过滤器报错，报错Cannot access javax.servlet.Filter。所以又在pom中引入javax.servlet依赖。重写Filter的方法，问题解决。
+`
+<dependency>
+<groupId>javax.servlet</groupId>
+<artifactId>servlet-api</artifactId>
+<version>2.5</version>
+</dependency>
+`
+
+**SpringCloud Config 分布式配置中心**
+
+SpringCloud Config为微服务架构中的微服务提供集中化的外部配置支持，配置服务器为各个不同微服务应用的所有环境提供了一个中心化的外部配置。
+
+SpringCloud Config分为服务端和客户端两部分。
+
+服务端也称为分布式配置中心，它是一个独立的微服务应用，用来连接配置服务器并为客户端提供获取配置信息，加密/解密信息等访问接口
+
+客户端则是通过指定的配置中心来管理应用资源，以及与业务相关的配置内容，并在启动的时候从配置中心获取和加载配置信息配置服务器默认采用git来存储配置信息，这样就有助于对环境配置进行版本管理，并且可以通过git客户端工具来方便的管理和访问配置内容。
+
+**作用**
+
+- 集中管理配置文件
+- 不同环境不同配置，动态化的配置更新，分环境部署比如dev/test/prod/beta/release
+- 运行期间动态调整配置，不再需要在每个服务部署的机器上编写配置文件，服务会向配置中心统一拉取配置自己的信息
+- 当配置发生变动时，服务不需要重启即可感知到配置的变化并应用新的配置
+- 将配置信息以REST接口的形式暴露：post、curl访问刷新均可…
+
