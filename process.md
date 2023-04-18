@@ -294,7 +294,7 @@ Spring Cloud Gateway 内置了多种路由过滤器，他们都由GatewayFilter�
 </dependency>
 `
 
-**SpringCloud Config 分布式配置中心**
+## SpringCloud Config 分布式配置中心
 
 SpringCloud Config为微服务架构中的微服务提供集中化的外部配置支持，配置服务器为各个不同微服务应用的所有环境提供了一个中心化的外部配置。
 
@@ -312,3 +312,150 @@ SpringCloud Config分为服务端和客户端两部分。
 - 当配置发生变动时，服务不需要重启即可感知到配置的变化并应用新的配置
 - 将配置信息以REST接口的形式暴露：post、curl访问刷新均可…
 
+**映射**
+windows下修改hosts文件，增加映射：127.0.0.1 config-3344.com
+
+**配置读取规则**
+{application} 就是应用名称，对应到配置文件上来，就是配置文件的名称部分，例如我上面创建的配置文件
+
+{profile} 就是配置文件的版本，我们的项目有开发版本、测试环境版本、生产环境版本，对应到配置文件上来就是以 application-{profile}.yml 加以区分，例如application-dev.yml、application-sit.yml、application-prod.yml
+
+{label} 表示 git 分支，默认是 master 分支，如果项目是以分支做区分也是可以的，那就可以通过不同的 label 来控制访问不同的配置文件了
+
+创建config client
+
+将读取application.yml的配置放入bootstrap.yml中，因为bootstap先加载，优先级高于application
+
+**分布式配置的动态刷新问题**
+
+Linux运维修改Gitee上的配置文件内容做调整
+刷新3344，发现ConfigServer配置中心立刻响应
+刷新3355，发现ConfigClient客户端没有任何响应
+3355没有变化除非自己重启或者重新加载
+难到每次运维修改配置文件，客户端都需要重启？？噩梦
+
+**Config客户端之动态刷新**
+
+避免每次更新配置都要重启客户端微服务3355，我们需要它能动态刷新，下面来修改3355模块
+
+POM引入actuator监控
+修改YML，暴露监控端口
+@RefreshScope业务类Controller修改
+
+执行curl -X POST "http://localhost:3355/actuator/refresh"
+
+## SpringCloud Bus 消息总线
+
+每次修改配置文件，都要执行刷新命令，还是不方便
+
+Spring Cloud Bus 配合 Spring Cloud Config 使用可以实现配置的动态刷新
+
+Spring Cloud Bus是用来将分布式系统的节点与轻量级消息系统链接起来的框架，它整合了Java的事件处理机制和消息中间件的功能。Spring Cloud Bus目前支持RabbitMQ和Kafka。
+
+Spring Cloud Bus能管理和传播分布式系统间的消息，就像一个分布式执行器，可用于广播状态更改、事件推送等，也可以当作微服务间的通信通道。
+
+**总线**
+
+在微服务架构的系统中，通常会使用轻量级的消息代理来构建一个共用的消息主题，并让系统中所有微服务实例都连接上来。由于该主题中产生的消息会被所有实例监听和消费，所以称它为消息总线。在总线上的各个实例，都可以方便地广播一些需要让其他连接在该主题上的实例都知道的消息。
+
+基本原理
+
+ConfigClient实例都监听MQ中同一个topic(默认是springCloudBus)。当一个服务刷新数据的时候，它会把这个信息放入到Topic中，这样其它监听同一Topic的服务就能得到通知，然后去更新自身的配置。
+
+**设计思想**
+
+利用消息总线触发一个客户端/bus/refresh,而刷新所有客户端的配置
+
+不合适
+打破了微服务的职责单一性，因为微服务本身是业务模块，它本不应该承担配置刷新的职责
+破坏了微服务各节点的对等性
+有一定的局限性。例如，微服务在迁移时，它的网络地址常常会发生变化，此时如果想要做到自动刷新，那就会增加更多的修改
+
+利用消息总线触发一个服务端ConfigServer的/bus/refresh端点，而刷新所有客户端的配置
+
+配置中心3344添加消息总线支持
+
+给客户端添加消息总线支持
+
+curl -X POST "http://localhost:3344/actuator/bus-refresh"
+
+动态刷新定点通知
+
+curl -X POST "http://localhost:3344/actuator/bus-refresh/springcloud-config-dev:3355"
+
+看的的教程这里使用的是curl -X POST "http://localhost:3344/actuator/bus-refresh/config-client:3355"
+但是实际上spring:application:name 并不是 config-client 原因是bootstrap里是config-client，但是相同的配置在从config中读取的application中也有，根据springboot读取顺序和覆盖逻辑，现在3355的name是springcloud-config-dev
+
+## SpringCloud Stream 消息驱动
+
+屏蔽底层消息中间件的差异,降低切换成本，统一消息的编程模型
+
+Spring Cloud Stream是用于构建与共享消息传递系统连接的高度可伸缩的事件驱动微服务框架，该框架提供了一个灵活的编程模型，它建立在已经建立和熟悉的Spring熟语和最佳实践上，包括支持持久化的发布/订阅、消费组以及消息分区这三个核心概念
+
+**为什么用Cloud Stream**
+
+问题：为什么要引入SpringCloud Stream
+
+举例：对于我们Java程序员来说，可能有时要使用ActiveMQ,有时要使用RabbitMQ,甚至还有RocketMQ以及Kafka，这之间的切换似乎很麻烦，我们很难，也没有太多时间去精通每一门技术，那有没有一种新技术的诞生，让我们不再关注具体MQ的细节，自动的给我们在各种MQ内切换。
+
+简介：Spring Cloud Stream 是一个用来为微服务应用构建消息驱动能力的框架。它可以基于 Spring Boot 来创建独立的、可用于生产的 Spring 应用程序。Spring Cloud Stream 为一些供应商的消息中间件产品提供了个性化的自动化配置实现，并引入了发布-订阅、消费组、分区这三个核心概念。通过使用 Spring Cloud Stream，可以有效简化开发人员对消息中间件的使用复杂度，让系统开发人员可以有更多的精力关注于核心业务逻辑的处理。但是目前 Spring Cloud Stream 只支持 RabbitMQ 和 Kafka 的自动化配置。
+
+一句话：屏蔽底层消息中间件的差异，降低切换成本，统一消息的编程模型。
+
+**Binder**
+
+在没有绑定器这个概念的情况下，我们的SpringBoot应用要直接与消息中间件进行信息交互的时候，由于各消息中间件构建的初衷不同，它们的实现细节上会有较大的差异性，通过定义绑定器作为中间层，完美地实现了应用程序与消息中间件细节之间的隔离。Stream对消息中间件的进一步封装，可以做到代码层面对中间件的无感知，甚至于动态的切换中间件(rabbitmq切换为kafka)，使得微服务开发的高度解耦，服务可以关注更多自己的业务流程
+
+Binder可以生成Binding，Binding用来绑定消息容器的生产者和消费者，它有两种类型，INPUT和OUTPUT，INPUT对应于消费者，OUTPUT对应于生产者。
+
+Stream中的消息通信方式遵循了发布-订阅模式
+
+**Stream标准流程套路**
+
+Binder：很方便的连接中间件，屏蔽差异
+
+Channel：通道，是队列Queue的一种抽象，在消息通讯系统中就是实现存储和转发的媒介，通过Channel对队列进行配置
+
+Source和Sink：简单的可理解为参照对象是Spring Cloud Stream自身，从Stream发布消息就是输出，接受消息就是输入
+
+**分组消费与持久化**
+
+8802/8803作为集群都会收到消息，有重复消费问题
+
+分组和持久化属性group
+
+相同组会存在竞争关系，只会有一个服务消费
+
+通过上述，解决了重复消费问题，再看看持久化
+
+停止8802/8803并去除掉8802的分组group: atguiguA，8803的分组group: atguiguA没有去掉
+8801先发送4条消息到rabbitmq
+先启动8802，无分组属性配置，后台没有打出来消息
+再启动8803，有分组属性配置，后台打出来了MQ上的消息
+
+## SpringCloud Sleuth 分布式请求链路跟踪
+
+在微服务框架中，一个由客户端发起的请求在后端系统中会经过多个不同的的服务节点调用来协同产生最后的请求结果，每一个前段请求都会形成一条复杂的分布式服务调用链路，链路中的任何一环出现高延时或错误都会引起整个请求最后的失败
+
+Spring Cloud Sleuth提供了一套完整的服务跟踪的解决方案，在分布式系统中提供追踪解决方案并且兼容支持了zipkin
+
+**zipkin**
+
+SpringCloud从F版起已不需要自己构建Zipkin Server了，只需调用jar包即可
+
+https://repo1.maven.org/maven2/io/zipkin/zipkin-server/2.24.0/
+
+`java -jar zipkin-server-2.12.9-exec.jar`
+
+运行控制台：http://localhost:9411/zipkin/
+
+术语—完整的调用链路： 表示一请求链路，一条链路通过Trace Id唯一标识，Span标识发起的请求信息，各span通过parent id 关联起来
+
+一条链路通过Trace Id唯一标识，Span标识发起的请求信息，各span通过parent id 关联起来
+
+**名词解释：**
+
+Trace：类似于树结构的Span集合，表示一条调用链路，存在唯一标识
+span：表示调用链路来源，通俗的理解span就是一次请求信息
+
+## SpringCloud Alibaba Nacos服务注册和配置中心
